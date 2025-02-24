@@ -22,15 +22,7 @@ ALLOWED_EDIT_FILES = LOCAL_FILES.union(PROJECT_FILES)
 def run_config_setup():
     """
     Opens a Tkinter form to collect user preferences and initial file content.
-    Fields include:
-      - Project Root Directory (absolute)
-      - Backend Directory (relative)
-      - Frontend Directory (relative)
-      - Use Docker? (checkbox)
-      - Use nginx? (checkbox)
-      - Include .env files? (checkbox)
-      - Initial content for intro.txt, middle.txt, goal.txt, and conclusion.txt (multiline)
-    Saves configuration to CONFIG_FILE and writes these four files to an "instructions" folder.
+    Saves configuration to CONFIG_FILE and writes the instruction files to the "instructions" directory.
     """
     config = {}
 
@@ -52,7 +44,7 @@ def run_config_setup():
         except Exception as e:
             print(f"Error saving configuration: {e}")
         
-        # Create the instructions directory and write the instruction files.
+        # Create instructions directory and write the instruction files.
         if not os.path.exists(INSTRUCTIONS_DIR):
             os.makedirs(INSTRUCTIONS_DIR)
         for fname, content in [("intro.txt", config["intro"]),
@@ -120,9 +112,45 @@ def open_in_mousepad(file_path):
     except Exception as e:
         print(f"Error deleting temporary file {file_path}: {e}")
 
-def open_in_mousepad_edit(file_path):
-    """Open file in mousepad for editing (do not delete the file)."""
-    subprocess.call(["mousepad", file_path])
+# --- Tkinter File Editor for --edit ---
+def edit_file_tk(filepath):
+    """
+    Opens a Tkinter window with a scrolled text widget preloaded with the file's content.
+    Supports Ctrl+A to select all text.
+    A Save button writes the modified text back to the file and closes the window.
+    """
+    editor = tk.Tk()
+    editor.title(f"Editing {os.path.basename(filepath)}")
+    text = scrolledtext.ScrolledText(editor, width=80, height=20)
+    text.pack(fill="both", expand=True)
+
+    # Load file content if exists
+    if os.path.exists(filepath):
+        try:
+            with open(filepath, "r") as f:
+                content = f.read()
+            text.insert("1.0", content)
+        except Exception as e:
+            text.insert("1.0", f"Error reading file: {e}")
+
+    # Bind Ctrl+A to select all text
+    def select_all(event):
+        text.tag_add("sel", "1.0", "end")
+        return "break"
+    text.bind("<Control-a>", select_all)
+
+    def save_and_close():
+        new_content = text.get("1.0", tk.END)
+        try:
+            with open(filepath, "w") as f:
+                f.write(new_content)
+        except Exception as e:
+            print(f"Error saving {filepath}: {e}")
+        editor.destroy()
+
+    btn = tk.Button(editor, text="Save", command=save_and_close)
+    btn.pack(pady=5)
+    editor.mainloop()
 
 # --- Editing Functionality ---
 def edit_files(file_list, config):
@@ -144,7 +172,7 @@ def edit_files(file_list, config):
                 print(f"Error: {fname} not found at {filepath}")
                 sys.exit(1)
             print(f"Editing {fname}...")
-            open_in_mousepad_edit(filepath)
+            edit_file_tk(filepath)
     else:
         for fname in file_list:
             if fname not in allowed:
@@ -159,7 +187,7 @@ def edit_files(file_list, config):
                 print(f"Error: {fname} not found at {filepath}")
                 sys.exit(1)
             print(f"Editing {fname}...")
-            open_in_mousepad_edit(filepath)
+            edit_file_tk(filepath)
 
 # --- Custom Tree Builder for Step 1 ---
 def custom_tree(directory, prefix="", level=1, max_level=4):
@@ -319,7 +347,7 @@ def build_tree(directory):
 class FileSelectionGUI:
     """
     Displays a Tkinter window with a nested file/directory tree.
-    Directories appear as labels (unselectable) and files as checkboxes.
+    Directories appear as labels (unselectable) and files appear as checkboxes.
     """
     def __init__(self, master, title, bg_color, base_dir, persistent_files):
         self.master = master
