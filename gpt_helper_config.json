@@ -1,0 +1,12 @@
+{
+    "project_root": "/home/jherby/projects/fencing_crm",
+    "backend_dir": "/home/jherby/projects/fencing_crm/backend",
+    "frontend_dir": "/home/jherby/projects/fencing_crm/frontend/fencing-frontend",
+    "use_docker": false,
+    "use_nginx": false,
+    "include_env": false,
+    "intro": "INTRO----------------",
+    "middle": "MIDDLE------------",
+    "goal": "THE GOALS-----------",
+    "conclusion": "CONCLUSION-----------"
+}
