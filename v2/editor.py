@@ -2,9 +2,10 @@ import os
 import subprocess
 import tempfile
 import platform
+import tkinter as tk
+from tkinter import scrolledtext
 
 def open_in_editor(file_path, editor=None):
-    """Opens the file in a user-specified or OS-specific editor."""
     if editor is None:
         if platform.system() == "Windows":
             editor = "notepad"
@@ -19,26 +20,26 @@ def open_in_editor(file_path, editor=None):
         print(f"Error deleting temporary file {file_path}: {e}")
 
 def edit_file_tk(filepath):
-    """Opens a Tkinter file editor for the given file."""
-    import tkinter as tk
-    from tkinter import scrolledtext
-    editor = tk.Tk()
-    editor.title(f"Editing {os.path.basename(filepath)}")
-    text = scrolledtext.ScrolledText(editor, width=80, height=20)
+    editor_window = tk.Tk()
+    editor_window.title(f"Editing {os.path.basename(filepath)}")
+    text = scrolledtext.ScrolledText(editor_window, width=80, height=20)
     text.pack(fill="both", expand=True)
-
+    text.focus_force()
     if os.path.exists(filepath):
         try:
             with open(filepath, "r") as f:
-                text.insert("1.0", f.read())
+                content = f.read()
+            text.insert("1.0", content)
         except Exception as e:
             text.insert("1.0", f"Error reading file: {e}")
-
-    def select_all(event):
-        text.tag_add("sel", "1.0", "end")
-        return "break"
-    text.bind("<Control-a>", select_all)
-
+    
+    def select_all_text():
+        text.tag_add("sel", "1.0", "end-1c")
+    
+    # Add a "Select" button for the text field.
+    tk.Button(editor_window, text="Select", command=select_all_text)\
+        .pack(pady=5)
+    
     def save_and_close():
         new_content = text.get("1.0", tk.END)
         try:
@@ -46,7 +47,8 @@ def edit_file_tk(filepath):
                 f.write(new_content)
         except Exception as e:
             print(f"Error saving {filepath}: {e}")
-        editor.destroy()
-
-    tk.Button(editor, text="Save", command=save_and_close).pack(pady=5)
-    editor.mainloop()
+        editor_window.destroy()
+    
+    tk.Button(editor_window, text="Save", command=save_and_close)\
+        .pack(pady=5)
+    editor_window.mainloop()

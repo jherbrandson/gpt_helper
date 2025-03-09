@@ -1,8 +1,15 @@
 import os
 
 def custom_tree(directory, prefix="", level=1, max_level=4):
-    """Recursively builds a tree-like list of strings from a directory."""
-    IGNORE_DIRS = {"migrations", "__pycache__", ".git", "node_modules", ".next", "public", "venv", "migration_backups", ".pytest_cache"}
+    """
+    Recursively builds a tree-like list of strings for the given directory,
+    similar to the Unix 'tree' command.
+    
+    Directories in the ignore set are skipped.
+    Files starting with '.' are skipped unless they are in ENABLE_FILES.
+    """
+    # Updated ignore set to include "build"
+    IGNORE_DIRS = {"migrations", "__pycache__", ".git", "node_modules", ".next", "public", "venv", "migration_backups", ".pytest_cache", "build"}
     ENABLE_FILES = {".env", ".env.local"}
     result_lines = []
     if level > max_level:
