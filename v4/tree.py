@@ -1,4 +1,4 @@
-# tree.py
+# gpt_helper/v4/tree.py
 
 import os
 from setup.content_setup import is_rel_path_blacklisted  # Added for consistent blacklist checking

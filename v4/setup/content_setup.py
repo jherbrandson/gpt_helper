@@ -1,4 +1,4 @@
-# setup/content_setup.py
+# gpt_helper/v4/setup/content_setup.py
 
 import os
 import sys
