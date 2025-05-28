@@ -11,7 +11,7 @@ def get_remote_tree(root_path, ssh_cmd, timeout=30):
     """
     try:
         proc = subprocess.run(
-            ssh_cmd.split() + ["find", root_path, "-print"],
+            ssh_cmd.split() + ["find", root_path, "-print 2>/dev/null"],
             capture_output=True, text=True, timeout=timeout
         )
         if proc.returncode == 0:

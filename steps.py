@@ -1,334 +1,195 @@
 # gpt_helper/dev/steps.py
-
 import os
-import tempfile
 import subprocess
+import tempfile
 from setup.constants import INSTRUCTIONS_DIR
-from editor import open_in_editor
 from tree import custom_tree
 
-def custom_remote_tree(root_path, ssh_cmd, prefix="", level=1, max_level=999, blacklist=None):
+# ---------------------------------------------------------------------------
+# Remote directory helper
+# ---------------------------------------------------------------------------
+
+def custom_remote_tree(root_path: str, ssh_cmd: str,
+                       prefix: str = "", level: int = 1,
+                       max_level: int = 999, blacklist: list[str] | None = None):
     """
-    Builds a tree-like listing for a remote directory using SSH.
-    It uses the remote 'find' command to retrieve a list of paths,
-    parses that list into a nested dictionary, then recursively formats
-    it into a tree-like list of strings.
-    
-    If a blacklist (list of relative paths) is provided, entries matching
-    those paths (or inside blacklisted directories) will be filtered out.
+    Build a text tree of *root_path* on a remote host accessed via *ssh_cmd*.
     """
     from setup.remote_utils import get_remote_tree, parse_remote_tree, filter_tree_dict
     lines = get_remote_tree(root_path, ssh_cmd)
     tree_dict = parse_remote_tree(lines, root_path)
     if blacklist:
         tree_dict = filter_tree_dict(tree_dict, root_path, blacklist, root_path)
-    
-    def recurse(tree, curr_prefix):
-        result = []
-        items = sorted(tree.keys())
-        for i, name in enumerate(items):
-            connector = "├── " if i < len(items) - 1 else "└── "
-            result.append(curr_prefix + connector + name)
-            if isinstance(tree[name], dict) and tree[name]:
-                extension = "│   " if i < len(items) - 1 else "    "
-                result.extend(recurse(tree[name], curr_prefix + extension))
-        return result
+
+    def recurse(d, pref):
+        out = []
+        keys = sorted(d.keys())
+        for idx, name in enumerate(keys):
+            connector = "├── " if idx < len(keys)-1 else "└── "
+            out.append(pref + connector + name)
+            if d[name]:
+                ext = "│   " if idx < len(keys)-1 else "    "
+                out.extend(recurse(d[name], pref + ext))
+        return out
 
     return recurse(tree_dict, prefix)
 
-def step1(config, suppress_output=False):
-    """
-    Step 1 builds the concatenated output using:
-      • The content of intro.txt (from the instructions folder)
-      • One or more directory trees (depending on single-root or multi-root config)
-      • The content of middle.txt, goal.txt, and conclusion.txt
-      • At the end, prints a header followed by the full contents of the files
-        selected during content setup (i.e. project_output_files). If the system is remote,
-        the SSH command is used to read the remote file content.
-    """
-    import os, subprocess, tempfile
-    from setup.constants import INSTRUCTIONS_DIR
-    from editor import open_in_editor
-    from tree import custom_tree
-    from setup.remote_utils import get_remote_tree, parse_remote_tree, filter_tree_dict
-    from steps import custom_remote_tree
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
-    def read_local(fname):
-        filepath = os.path.join(INSTRUCTIONS_DIR, fname)
+def _read_local(fname: str) -> str:
+    fp = os.path.join(INSTRUCTIONS_DIR, fname)
+    try:
+        with open(fp, "r") as f:
+            return f.read()
+    except Exception:
+        return ""
+
+def _write_temp(txt: str) -> str:
+    tf = tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".txt")
+    tf.write(txt)
+    tf.close()
+    return tf.name
+
+# ---------------------------------------------------------------------------
+# STEP 1  –  build “setup” text block
+# ---------------------------------------------------------------------------
+
+def step1(config: dict) -> str:
+    """
+    Return one big string consisting of
+        background.txt
+        + directory tree(s)
+        + rules.txt
+        + current_goal.txt
+        + optional extra project-output files
+    No editor window is opened here; the caller decides what to do with the
+    resulting text.
+    """
+    background   = _read_local("background.txt")
+    rules        = _read_local("rules.txt")
+    current_goal = _read_local("current_goal.txt")
+
+    # ---------------- directory-tree(s) -----------------------
+    if config.get("has_single_root"):
+        root = config["project_root"]
+        if config.get("system_type") == "remote":
+            ssh = config.get("ssh_command", "")
+            bl  = config.get("blacklist", {}).get(root, [])
+            lines = [root] + custom_remote_tree(root, ssh, "", 1, 999, bl)
+        else:
+            bl  = config.get("blacklist", {}).get(root, [])
+            lines = [root] + custom_tree(root, "", 1, 999, bl, root)
+        tree_text = "\n".join(lines)
+    else:
+        seg_chunks = []
+        for seg in config.get("directories", []):
+            seg_root = seg["directory"]
+            seg_chunks.append(f"Segment: {seg['name']} => {seg_root}")
+            if seg.get("is_remote"):
+                ssh = config.get("ssh_command", "")
+                bl  = config.get("blacklist", {}).get(seg_root, [])
+                seg_lines = [seg_root] + custom_remote_tree(seg_root, ssh, "", 1, 999, bl)
+            else:
+                bl  = config.get("blacklist", {}).get(seg_root, [])
+                seg_lines = [seg_root] + custom_tree(seg_root, "", 1, 999, bl, seg_root)
+            seg_chunks.extend(seg_lines)
+            seg_chunks.append("")
+        tree_text = "\n".join(seg_chunks)
+
+    # ---------------- assemble core section -------------------
+    parts = []
+    if background.strip():   parts.append(background.rstrip())
+    if tree_text.strip():    parts.append(tree_text.rstrip())
+    if rules.strip():        parts.append(rules.rstrip())
+    if current_goal.strip(): parts.append(current_goal.rstrip())
+    txt = "\n\n".join(parts) + "\n\n"
+
+    # ---------------- append extra files ----------------------
+    def _cat_local(fp):
         try:
-            with open(filepath, "r") as f:
-                return f.read()
-        except Exception as e:
-            print(f"Error reading {filepath}: {e}")
+            with open(fp, "r", encoding="utf-8", errors="replace") as f:
+                return f.read().rstrip()
+        except Exception:
+            return ""
+    def _cat_remote(ssh_cmd, fp):
+        try:
+            proc = subprocess.run(ssh_cmd.split()+["cat", fp], capture_output=True, text=True)
+            return proc.stdout.rstrip() if proc.returncode == 0 else ""
+        except Exception:
             return ""
 
-    intro = read_local("intro.txt")
-    middle = read_local("middle.txt")
-    goal = read_local("goal.txt")
-    conclusion = read_local("conclusion.txt")
-
-    # --- Build directory tree listing ---
-    tree_output = ""
+    extras = []
     if config.get("has_single_root"):
-        # Existing single-root logic
-        project_root = config.get("project_root", os.getcwd())
-        if config.get("system_type") != "remote":
-            project_root = os.path.abspath(project_root)
-
-        if config.get("system_type") == "remote":
-            ssh_cmd = config.get("ssh_command", "")
-            blacklist_list = []
-            if config.get("blacklist"):
-                blacklist_list = config["blacklist"].get(project_root, [])
-            tree_lines = [project_root] + custom_remote_tree(
-                project_root, ssh_cmd, prefix="", level=1, max_level=999, blacklist=blacklist_list
+        for fp in config.get("project_output_files", []):
+            extras.append(
+                _cat_remote(config.get("ssh_command",""), fp)
+                if config.get("system_type") == "remote"
+                else _cat_local(fp)
             )
-        else:
-            # Get blacklist for local directory
-            blacklist_list = []
-            if config.get("blacklist"):
-                blacklist_list = config["blacklist"].get(project_root, [])
-            tree_lines = [project_root] + custom_tree(
-                project_root, prefix="", level=1, max_level=999,
-                blacklist=blacklist_list, base_path=project_root
-            )
-        tree_output = "\n".join(tree_lines)
-
     else:
-        # Multi-root logic: output a directory listing for each segment
-        multi_tree_output = []
-        directories = config.get("directories", [])
-        for d in directories:
-            seg_name = d.get("name", "Unnamed Segment")
-            directory_root = d["directory"]
-            is_remote = d.get("is_remote", False)
-            multi_tree_output.append(f"Segment: {seg_name} => {directory_root}")
-
-            if is_remote:
-                ssh_cmd = config.get("ssh_command", "")
-                blacklist_list = config.get("blacklist", {}).get(directory_root, [])
-                lines = [directory_root] + custom_remote_tree(
-                    directory_root, ssh_cmd, prefix="", level=1, max_level=999, blacklist=blacklist_list
+        for seg in config.get("directories", []):
+            for fp in seg.get("output_files", []):
+                extras.append(
+                    _cat_remote(config.get("ssh_command",""), fp)
+                    if seg.get("is_remote")
+                    else _cat_local(fp)
                 )
-            else:
-                # Normalize the directory root to ensure consistent blacklist lookup.
-                normalized_root = os.path.normpath(directory_root)
-                blacklist_list = config.get("blacklist", {}).get(normalized_root, [])
-                lines = [directory_root] + custom_tree(
-                    directory_root, prefix="", level=1, max_level=999,
-                    blacklist=blacklist_list, base_path=directory_root
-                )
-            multi_tree_output.extend(lines)
-            multi_tree_output.append("")  # blank line between segments
+    if extras:
+        txt += "Project Output Files:\n\n" + "\n\n".join([e for e in extras if e]) + "\n"
 
-        tree_output = "\n".join(multi_tree_output)
+    return txt
 
-    # --- Assemble the primary content ---
-    content = ""
-    if intro:
-        content += intro.rstrip("\n") + "\n"
-    if tree_output.strip():
-        content += tree_output.rstrip("\n") + "\n\n"
-    if middle.strip():
-        content += middle.rstrip("\n") + "\n\n"
-    if goal.strip():
-        content += goal.rstrip("\n") + "\n\n"
-    if conclusion.strip():
-        content += conclusion.rstrip("\n") + "\n\n"
+# ---------------------------------------------------------------------------
+# STEP 2  –  collect file-content per segment
+# ---------------------------------------------------------------------------
 
-    # --- Append additional files selected during content setup ---
-    extra_content = ""
-    if config.get("has_single_root"):
-        extra_files = config.get("project_output_files", [])
-        if extra_files:
-            extra_content += "Project Output Files:\n\n"
-        for filepath in extra_files:
-            if config.get("system_type") == "remote":
-                ssh_cmd = config.get("ssh_command", "")
-                try:
-                    proc = subprocess.run(ssh_cmd.split() + ["cat", filepath],
-                                          capture_output=True, text=True)
-                    if proc.returncode == 0:
-                        extra_content += proc.stdout.rstrip("\n") + "\n\n"
-                    else:
-                        check_dir_cmd = ssh_cmd.split() + ["test", "-d", filepath]
-                        try:
-                            check_dir_proc = subprocess.run(check_dir_cmd, capture_output=True)
-                            if check_dir_proc.returncode == 0:
-                                pass
-                            else:
-                                print(f"Warning: remote file {filepath} not read (error code {proc.returncode}).")
-                        except Exception as e:
-                            print(f"Error verifying directory status for {filepath}: {e}")
-                except Exception as e:
-                    print(f"Error reading remote file {filepath}: {e}")
-            else:
-                if os.path.exists(filepath):
-                    try:
-                        with open(filepath, "r", encoding="utf-8", errors="replace") as f:
-                            extra_content += f.read().rstrip("\n") + "\n\n"
-                    except Exception as e:
-                        print(f"Error reading {filepath}: {e}")
-                else:
-                    print(f"Warning: {filepath} not found.")
-    else:
-        for d in config.get("directories", []):
-            seg_name = d.get("name", "Unnamed Segment")
-            extra_files = d.get("output_files", [])
-            if extra_files:
-                extra_content += f"Project Output Files for {seg_name}:\n\n"
-            for filepath in extra_files:
-                if d.get("is_remote", False):
-                    ssh_cmd = config.get("ssh_command", "")
-                    try:
-                        proc = subprocess.run(ssh_cmd.split() + ["cat", filepath],
-                                              capture_output=True, text=True)
-                        if proc.returncode == 0:
-                            extra_content += proc.stdout.rstrip("\n") + "\n\n"
-                        else:
-                            check_dir_cmd = ssh_cmd.split() + ["test", "-d", filepath]
-                            try:
-                                check_dir_proc = subprocess.run(check_dir_cmd, capture_output=True)
-                                if check_dir_proc.returncode == 0:
-                                    print(f"Note: remote path {filepath} is a directory. Skipping cat.")
-                                else:
-                                    print(f"Warning: remote file {filepath} not read (error code {proc.returncode}).")
-                            except Exception as e:
-                                print(f"Error verifying directory status for {filepath}: {e}")
-                    except Exception as e:
-                        print(f"Error reading remote file {filepath}: {e}")
-                else:
-                    if os.path.exists(filepath):
-                        try:
-                            with open(filepath, "r", encoding="utf-8", errors="replace") as f:
-                                extra_content += f.read().rstrip("\n") + "\n\n"
-                        except Exception as e:
-                            print(f"Error reading {filepath}: {e}")
-                    else:
-                        print(f"Warning: {filepath} not found.")
-    if extra_content:
-        content += extra_content
-
-    if not content.strip():
-        print("Warning: No content was generated in Step 1. Check your instruction files and project root.")
-
-    line_count = len(content.splitlines())
-    if suppress_output:
-        return content
-    else:
-        print(f"Setup text: {line_count} lines.")
-        def write_temp_file(text):
-            temp = tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".txt")
-            temp.write(text)
-            temp.close()
-            return temp.name
-
-        temp_path = write_temp_file(content)
-        open_in_editor(temp_path)
-        return line_count
-
-def write_temp_file(content):
-    temp = tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".txt")
-    temp.write(content)
-    temp.close()
-    return temp.name
-
-def step2_all_segments(config, suppress_output=False):
+def step2_all_segments(config: dict) -> str:
     """
-    For each project segment configured in config["directories"],
-    this function spawns a file selection GUI (one segment at a time).
-    For each segment:
-      - The user selects files via the GUI.
-      - If files are selected, their contents are concatenated and displayed in an editor.
-      - The function prints "Segment X: [Line count] lines." for each segment.
-      - If the user closes the window without finishing, that segment is skipped.
-    The function returns the total line count across all segments.
+    Spawn a file-selection GUI for each segment and return a single string
+    containing the concatenated content of all user-selected files
+    (triple-newline separated). No editor windows are opened here.
     """
-    from gui import gui_selection  # Using the updated file selection GUI function
+    from gui import gui_selection
     from setup.content_setup import is_rel_path_blacklisted
 
-    segments = config.get("directories", [])
-    total_segment_lines = 0
-    outputs = []
-    colors = ["light blue", "lavender", "light green", "light yellow", "light coral"]
-    
-    # Get project root for blacklist lookup
-    project_root = config.get("project_root", os.getcwd())
-    if config.get("system_type") != "remote":
-        project_root = os.path.abspath(project_root)
-    
-    for i, seg in enumerate(segments):
-        directory = seg["directory"]
-        title = f"Select Files for {seg['name']}"
-        bg_color = colors[i % len(colors)]
+    blobs = []
+    project_root = os.path.abspath(config.get("project_root", os.getcwd()))
+    color_cycle = ["light blue", "lavender", "light green", "light yellow", "light coral"]
+
+    for idx, seg in enumerate(config.get("directories", [])):
         print(f"Starting file selection for segment '{seg['name']}'")
-        is_remote = seg.get("is_remote", False)
-        ssh_cmd = config.get("ssh_command", "") if is_remote else ""
-        
-        # Get blacklist from project root for both remote and local
-        blacklist = config.get("blacklist", {})
-        selected_files = gui_selection(
-            title, bg_color, directory, seg.get("name", f"segment_{i}"),
-            is_remote, ssh_cmd, blacklist, project_root
+        selected = gui_selection(
+            f"Select Files for {seg['name']}",
+            color_cycle[idx % len(color_cycle)],
+            seg["directory"],
+            seg["name"],
+            seg.get("is_remote", False),
+            config.get("ssh_command","") if seg.get("is_remote") else "",
+            config.get("blacklist", {}),
+            project_root
         )
-        
-        if selected_files:
-            if not is_remote and blacklist:
-                valid_files = []
-                for f in selected_files:
-                    rel = os.path.relpath(f, project_root).strip(os.sep)
-                    if not is_rel_path_blacklisted(rel, blacklist.get(project_root, [])):
-                        valid_files.append(f)
-                selected_files = valid_files
+        seg["output_files"] = selected
 
-            if selected_files:
-                file_texts = []
-                for f in selected_files:
-                    if is_remote:
-                        try:
-                            proc = subprocess.run(ssh_cmd.split() + ["cat", f],
-                                                  capture_output=True, text=True)
-                            if proc.returncode == 0:
-                                file_texts.append(proc.stdout.rstrip("\n"))
-                            else:
-                                check_dir_cmd = ssh_cmd.split() + ["test", "-d", f]
-                                try:
-                                    check_dir_proc = subprocess.run(check_dir_cmd, capture_output=True)
-                                    if check_dir_proc.returncode == 0:
-                                        print(f"Note: remote path {f} is a directory. Skipping cat.")
-                                    else:
-                                        print(f"Warning: remote file {f} not read (error code {proc.returncode}).")
-                                except Exception as e:
-                                    print(f"Error verifying directory status for {f}: {e}")
-                        except Exception as e:
-                            print(f"Error reading remote file {f}: {e}")
-                    else:
-                        if os.path.exists(f):
-                            try:
-                                with open(f, "r", encoding="utf-8", errors="replace") as file:
-                                    file_texts.append(file.read().rstrip("\n"))
-                            except Exception as e:
-                                print(f"Error reading {f}: {e}")
-                        else:
-                            print(f"Warning: {f} not found.")
-                combined_text = "\n\n\n".join(file_texts)
-                open_in_editor(write_temp_file(combined_text))
-                seg["output_files"] = selected_files
-                outputs.append(combined_text)
-                seg_line_count = len(combined_text.splitlines())
-                print(f"Segment {i+1}: {seg_line_count} lines.")
-                total_segment_lines += seg_line_count
+        seg_texts = []
+        for fp in selected:
+            if seg.get("is_remote"):
+                try:
+                    proc = subprocess.run(config.get("ssh_command","").split()+["cat", fp],
+                                          capture_output=True, text=True)
+                    if proc.returncode == 0:
+                        seg_texts.append(proc.stdout.rstrip())
+                except Exception:
+                    pass
             else:
-                print(f"Segment '{seg['name']}' has no valid files after filtering blacklist.")
-                seg["output_files"] = []
-        else:
-            print(f"Segment '{seg['name']}' was skipped (no files selected).")
-            seg["output_files"] = []
-    return total_segment_lines
+                if os.path.exists(fp):
+                    try:
+                        with open(fp, "r", encoding="utf-8", errors="replace") as f:
+                            seg_texts.append(f.read().rstrip())
+                    except Exception:
+                        pass
+        if seg_texts:
+            blobs.append("\n\n".join(seg_texts))
 
-def write_temp_file(content):
-    import tempfile
-    temp = tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".txt")
-    temp.write(content)
-    temp.close()
-    return temp.name
+    return "\n\n\n".join(blobs)

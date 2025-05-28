@@ -1,56 +1,67 @@
 # gpt_helper/dev/editor.py
-
 import os
-import subprocess
-import tempfile
 import platform
+import subprocess
 import tkinter as tk
 from tkinter import scrolledtext
 
-def open_in_editor(file_path, editor=None):
-    if editor is None:
-        if platform.system() == "Windows":
-            editor = "notepad"
-        elif platform.system() == "Darwin":
-            editor = "open -e"
-        else:
-            editor = "mousepad"
-    subprocess.call(editor.split() + [file_path])
-    try:
-        os.remove(file_path)
-    except Exception as e:
-        print(f"Error deleting temporary file {file_path}: {e}")
+# ---------------------------------------------------------------------------
+# open_in_editor  – launch external editor, then delete temp file
+# ---------------------------------------------------------------------------
 
-def edit_file_tk(filepath):
-    editor_window = tk.Tk()
-    editor_window.title(f"Editing {os.path.basename(filepath)}")
-    text = scrolledtext.ScrolledText(editor_window, width=80, height=20)
-    text.pack(fill="both", expand=True)
-    text.focus_force()
+def open_in_editor(file_path: str, editor: str | None = None):
+    """
+    Open *file_path* in a GUI editor (mousepad / notepad / TextEdit).
+    The caller is expected to provide a temporary file; this function
+    deletes the file after the editor window is closed.
+    """
+    if editor is None:
+        match platform.system():
+            case "Windows": editor = "notepad"
+            case "Darwin":  editor = "open -e"
+            case _:         editor = "mousepad"
+    try:
+        subprocess.call(editor.split() + [file_path])
+    finally:
+        try:
+            os.remove(file_path)
+        except Exception as e:
+            print(f"Error deleting temporary file {file_path}: {e}")
+
+# ---------------------------------------------------------------------------
+# edit_file_tk  – basic Tkinter editor for existing on-disk file
+# ---------------------------------------------------------------------------
+
+def edit_file_tk(filepath: str):
+    """
+    Fallback Tkinter-based editor that loads an existing file,
+    allows inline editing, and saves changes back to disk.
+    """
+    win = tk.Tk()
+    win.title(f"Editing {os.path.basename(filepath)}")
+
+    txt = scrolledtext.ScrolledText(win, width=80, height=20)
+    txt.pack(fill="both", expand=True)
+    txt.focus_force()
+
     if os.path.exists(filepath):
         try:
             with open(filepath, "r") as f:
-                content = f.read()
-            text.insert("1.0", content)
+                txt.insert("1.0", f.read())
         except Exception as e:
-            text.insert("1.0", f"Error reading file: {e}")
-    
-    def select_all_text():
-        text.tag_add("sel", "1.0", "end-1c")
-    
-    # Add a "Select" button for the text field.
-    tk.Button(editor_window, text="Select", command=select_all_text)\
-        .pack(pady=5)
-    
+            txt.insert("1.0", f"Error reading file: {e}")
+
+    def select_all():
+        txt.tag_add("sel", "1.0", "end-1c")
+    tk.Button(win, text="Select", command=select_all).pack(pady=5)
+
     def save_and_close():
-        new_content = text.get("1.0", tk.END)
         try:
             with open(filepath, "w") as f:
-                f.write(new_content)
+                f.write(txt.get("1.0", tk.END))
         except Exception as e:
             print(f"Error saving {filepath}: {e}")
-        editor_window.destroy()
-    
-    tk.Button(editor_window, text="Save", command=save_and_close)\
-        .pack(pady=5)
-    editor_window.mainloop()
+        win.destroy()
+    tk.Button(win, text="Save", command=save_and_close).pack(pady=5)
+
+    win.mainloop()
