@@ -389,7 +389,7 @@ class RemoteFileOptimizer:
 def create_optimized_step2(config):
     """Enhanced step2 with remote optimizer"""
     from setup.content_setup import is_rel_path_blacklisted
-    from gui.main_enhanced import enhanced_gui_selection
+    from gui import gui_selection
     
     blobs = []
     project_root = os.path.abspath(config.get("project_root", os.getcwd()))
@@ -410,7 +410,7 @@ def create_optimized_step2(config):
     for idx, seg in enumerate(config.get("directories", [])):
         print(f"\n📁 Starting enhanced file selection for segment '{seg['name']}'")
         
-        selected = enhanced_gui_selection(
+        selected = gui_selection(
             f"Select Files for {seg['name']}",
             color_cycle[idx % len(color_cycle)],
             seg["directory"],
@@ -418,7 +418,8 @@ def create_optimized_step2(config):
             seg.get("is_remote", False),
             config.get("ssh_command", "") if seg.get("is_remote") else "",
             config.get("blacklist", {}),
-            project_root
+            project_root,
+            config  # Pass the config here
         )
         
         seg["output_files"] = selected

@@ -120,8 +120,8 @@ class SetupWizard:
         """Run the wizard and return True if completed successfully"""
         self.root = tk.Tk()
         self.root.title("GPT Helper Setup Wizard")
-        self.root.geometry("900x700")
-        self.root.minsize(800, 600)
+        self.root.geometry("1000x750")
+        self.root.minsize(900, 650)
         
         # Configure styles
         self._setup_styles()
@@ -134,6 +134,9 @@ class SetupWizard:
         
         # Center window
         self._center_window()
+        
+        # Add keyboard shortcuts
+        self._setup_shortcuts()
         
         # Run
         self.root.mainloop()
@@ -203,7 +206,7 @@ class SetupWizard:
         
         # Progress bar
         self.progress_bar = ttk.Progressbar(progress_frame,
-                                          length=600,
+                                          length=700,
                                           mode='determinate',
                                           style='TProgressbar')
         self.progress_bar.pack(pady=10)
@@ -254,6 +257,12 @@ class SetupWizard:
                                command=self._cancel_wizard)
         cancel_btn.pack(side="left", padx=20)
         
+        # Help button
+        help_btn = ttk.Button(self.nav_frame,
+                             text="Help",
+                             command=self._show_help)
+        help_btn.pack(side="left")
+        
         # Next button
         self.next_btn = ttk.Button(self.nav_frame,
                                   text="Next →",
@@ -266,6 +275,15 @@ class SetupWizard:
                                   text="Skip",
                                   command=self._skip_step)
         self.skip_btn.pack(side="right", padx=10)
+    
+    def _setup_shortcuts(self):
+        """Setup keyboard shortcuts"""
+        self.root.bind("<Control-n>", lambda e: self._next_step())
+        self.root.bind("<Control-b>", lambda e: self._prev_step())
+        self.root.bind("<Right>", lambda e: self._next_step())
+        self.root.bind("<Left>", lambda e: self._prev_step())
+        self.root.bind("<Escape>", lambda e: self._cancel_wizard())
+        self.root.bind("<F1>", lambda e: self._show_help())
     
     def _create_step_bubbles(self):
         """Create step indicator bubbles"""
@@ -369,7 +387,7 @@ class SetupWizard:
         ttk.Label(header_frame,
                  text=step.description,
                  style='Description.TLabel',
-                 wraplength=600).pack(anchor="w", pady=(10, 0))
+                 wraplength=700).pack(anchor="w", pady=(10, 0))
         
         # Separator
         ttk.Separator(self.content_frame, orient='horizontal').pack(
@@ -414,8 +432,8 @@ class SetupWizard:
             self.next_btn.config(text="Next →")
         
         # Skip button - only show for optional steps
-        # You can customize this logic
-        self.skip_btn['state'] = 'normal'
+        # For now, make it always available except on the last step
+        self.skip_btn['state'] = 'disabled' if self.current_step == len(self.steps) - 1 else 'normal'
     
     def _prev_step(self):
         """Go to previous step"""
@@ -456,6 +474,17 @@ class SetupWizard:
             self.save_config()
             self.root.destroy()
     
+    def _show_help(self):
+        """Show help for current step"""
+        current = self.steps[self.current_step]
+        help_text = f"Help for: {current.title}\n\n{current.description}"
+        
+        # Add step-specific help if available
+        if hasattr(current, 'get_help'):
+            help_text += f"\n\n{current.get_help()}"
+        
+        messagebox.showinfo("Help", help_text)
+    
     def _finish_wizard(self):
         """Complete the wizard"""
         # Save final configuration
@@ -464,14 +493,14 @@ class SetupWizard:
         # Show success message
         success_window = tk.Toplevel(self.root)
         success_window.title("Setup Complete")
-        success_window.geometry("500x300")
+        success_window.geometry("500x350")
         success_window.transient(self.root)
         
         # Center the success window
         success_window.update_idletasks()
         x = (success_window.winfo_screenwidth() - 500) // 2
-        y = (success_window.winfo_screenheight() - 300) // 2
-        success_window.geometry(f"500x300+{x}+{y}")
+        y = (success_window.winfo_screenheight() - 350) // 2
+        success_window.geometry(f"500x350+{x}+{y}")
         
         # Success content
         success_frame = tk.Frame(success_window, bg='white')
@@ -495,6 +524,15 @@ class SetupWizard:
                 bg='white',
                 justify="center").pack(pady=20)
         
+        # Summary stats
+        summary_text = self._get_summary_text()
+        tk.Label(success_frame,
+                text=summary_text,
+                font=('Arial', 10),
+                bg='white',
+                fg='#666666',
+                justify="center").pack(pady=10)
+        
         # Buttons
         btn_frame = tk.Frame(success_frame, bg='white')
         btn_frame.pack(pady=20)
@@ -508,11 +546,18 @@ class SetupWizard:
                   command=self._close_wizard,
                   style='Primary.TButton').pack(side="left", padx=10)
     
+    def _get_summary_text(self):
+        """Get configuration summary text"""
+        dirs = len(self.config.get('directories', []))
+        blacklist_count = sum(len(patterns) for patterns in self.config.get('blacklist', {}).values())
+        
+        return f"Configured {dirs} directories with {blacklist_count} exclusion patterns"
+    
     def _show_config_summary(self):
         """Show configuration summary"""
         summary_window = tk.Toplevel(self.root)
         summary_window.title("Configuration Summary")
-        summary_window.geometry("600x500")
+        summary_window.geometry("700x500")
         
         # Create text widget with scrollbar
         text_frame = ttk.Frame(summary_window)
@@ -582,7 +627,7 @@ def create_info_box(parent, text, type="info"):
             font=('Arial', 11),
             bg=bg_color,
             fg=fg_color,
-            wraplength=500,
+            wraplength=600,
             justify="left").pack(side="left", padx=(0, 10), pady=10)
     
     return frame

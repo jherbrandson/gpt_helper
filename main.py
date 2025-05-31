@@ -17,22 +17,14 @@ from collections import defaultdict
 from datetime import timedelta
 
 from setup.constants import CONFIG_FILE, INSTRUCTIONS_DIR
-
-# Try to use enhanced setup if available
-try:
-    from setup import run_enhanced_setup, ENHANCED_SETUP_AVAILABLE
-    print("✅ Enhanced setup available")
-except ImportError:
-    ENHANCED_SETUP_AVAILABLE = False
-    print("ℹ️  Using classic setup (enhanced version not available)")
-
+from setup import run_setup
 from steps import step1, step2_all_segments
 from editor import open_in_editor, edit_file_tk
 
 # Import GUI
 try:
     from gui import gui_selection
-    print("✅ Using enhanced GUI with performance optimizations")
+    print("✅ GUI module loaded successfully")
 except ImportError:
     print("❌ Error: Could not import GUI module")
     sys.exit(1)
@@ -351,7 +343,7 @@ def create_optimized_step2(config):
                 remote_readers[ssh_cmd] = RemoteFileOptimizer(ssh_cmd)
     
     for idx, seg in enumerate(config.get("directories", [])):
-        print(f"\n📁 Starting enhanced file selection for segment '{seg['name']}'")
+        print(f"\n📁 Starting file selection for segment '{seg['name']}'")
         
         selected = gui_selection(
             f"Select Files for {seg['name']}",
@@ -361,7 +353,8 @@ def create_optimized_step2(config):
             seg.get("is_remote", False),
             config.get("ssh_command", "") if seg.get("is_remote") else "",
             config.get("blacklist", {}),
-            project_root
+            project_root,
+            config  # Pass the config here
         )
         
         seg["output_files"] = selected
@@ -497,78 +490,25 @@ class ConfigManager:
 # Setup Functions
 # ---------------------------------------------------------------------------
 def run_config_setup():
-    """Run configuration setup - uses enhanced wizard if available"""
+    """Run configuration setup using the consolidated wizard"""
     
     print("\n🎨 Starting GPT Helper Setup Wizard...")
     print("="*60)
     
-    # Check if we should use enhanced setup
-    use_enhanced = ENHANCED_SETUP_AVAILABLE
+    # Check for quick setup option
+    if len(sys.argv) > 1 and sys.argv[1] == "--setup-quick":
+        return quick_setup()
     
-    if ENHANCED_SETUP_AVAILABLE:
-        # Ask user preference
-        print("\n📋 Setup Options:")
-        print("1. Enhanced Setup Wizard (Recommended) - Modern UI with helpful features")
-        print("2. Classic Setup Wizard - Traditional step-by-step interface")
-        print("3. Quick Setup - Use intelligent defaults")
-        
-        choice = input("\nSelect option (1/2/3) [1]: ").strip() or "1"
-        
-        if choice == "1":
-            use_enhanced = True
-        elif choice == "2":
-            use_enhanced = False
-        elif choice == "3":
-            return quick_setup()
-        else:
-            print("Invalid choice, using enhanced setup...")
-            use_enhanced = True
+    # Run the consolidated setup wizard
+    print("\n🚀 Launching setup wizard...")
+    config = run_setup()
     
-    if use_enhanced and ENHANCED_SETUP_AVAILABLE:
-        try:
-            print("\n🚀 Launching enhanced setup wizard...")
-            from setup import run_enhanced_setup
-            config = run_enhanced_setup()
-            
-            if config:
-                print("\n✅ Setup completed successfully!")
-                return config
-            else:
-                print("\n❌ Setup cancelled")
-                return None
-                
-        except Exception as e:
-            print(f"⚠️  Enhanced setup failed: {e}")
-            print("   Falling back to classic setup...")
-            use_enhanced = False
-    
-    if not use_enhanced or not ENHANCED_SETUP_AVAILABLE:
-        # Classic setup
-        from setup.overall_setup import run_directory_setup
-        from setup.directory_config import run_directory_config
-        from setup.blacklist_setup import run_blacklist_setup
-        from setup.content_setup import run_content_setup
-
-        wizard_steps = [
-            ("Directory Setup", run_directory_setup),
-            ("Directory Configuration", run_directory_config),
-            ("Blacklist Setup", run_blacklist_setup),
-            ("Content Setup", run_content_setup)
-        ]
-        
-        cfg = {}
-        idx = 0
-        
-        while idx < len(wizard_steps):
-            step_name, step_func = wizard_steps[idx]
-            print(f"\n{'='*50}")
-            print(f"Step {idx+1}/{len(wizard_steps)}: {step_name}")
-            print(f"{'='*50}")
-            
-            cfg, action = step_func(cfg)
-            idx = max(0, idx-1) if action == "back" else idx+1
-        
-        return cfg
+    if config:
+        print("\n✅ Setup completed successfully!")
+        return config
+    else:
+        print("\n❌ Setup cancelled")
+        return None
 
 def quick_setup():
     """Quick setup with intelligent defaults"""
@@ -577,20 +517,6 @@ def quick_setup():
     # Detect project root
     cwd = os.getcwd()
     print(f"\n📁 Using current directory as project root: {cwd}")
-    
-    # Analyze project
-    try:
-        from setup.enhanced_setup import ProjectAnalyzer
-        analyzer = ProjectAnalyzer(cwd)
-        suggestions = analyzer.analyze()
-        
-        print("\n🔍 Project Analysis:")
-        if suggestions['project_types']:
-            print(f"   Detected types: {', '.join(suggestions['project_types'])}")
-        print(f"   Files: {suggestions['structure_summary']['total_files']}")
-        print(f"   Directories: {suggestions['structure_summary']['total_dirs']}")
-    except:
-        suggestions = {'recommended_blacklist': []}
     
     # Create config
     config = {
@@ -604,7 +530,7 @@ def quick_setup():
             'is_remote': False
         }],
         'blacklist': {
-            cwd: suggestions.get('recommended_blacklist', [])
+            cwd: ['__pycache__', '*.pyc', 'node_modules/', '.git/', '.venv/', 'venv/']
         },
         'background': '',
         'rules': '',
@@ -751,6 +677,17 @@ def build_from_last_selection(cfg):
     except:
         print("⚠️  No previous selection found")
         return ""
+    
+    # Always reload config to get latest changes
+    from setup.constants import CONFIG_FILE
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, "r") as f:
+                fresh_config = json.load(f)
+            # Update the passed config with fresh values
+            cfg.update(fresh_config)
+        except:
+            pass
     
     blobs = []
     
@@ -965,6 +902,7 @@ Examples:
     print("\n🔨 Building project context...")
     start_time = time.time()
     
+    # Generate initial step1 output (before GUI)
     setup_text = step1(cfg)
     
     if args.step1:
@@ -977,12 +915,63 @@ Examples:
         # Quick mode - use last selection
         print("\n⚡ Quick mode - using previous file selection")
         segment_text = build_from_last_selection(cfg)
+        
+        # IMPORTANT: Reload config and regenerate step1 after quick mode
+        config_mgr = ConfigManager()
+        cfg = config_mgr.load_config()
+        
+        # Single-root convenience (again after reload)
+        if cfg.get("has_single_root"):
+            pr = os.path.abspath(cfg.get("project_root", os.getcwd()))
+            cfg["directories"] = [{
+                "name": os.path.basename(pr) or pr,
+                "is_remote": cfg.get("system_type") == "remote",
+                "directory": pr
+            }]
+        
+        print("\n🔄 Regenerating step1 with latest config...")
+        setup_text = step1(cfg)
+        
     elif args.optimized or any(d.get("is_remote") for d in cfg.get("directories", [])):
         # Use optimized version for remote or if requested
         segment_text = create_optimized_step2(cfg)
+        
+        # IMPORTANT: Reload config and regenerate step1 after GUI
+        config_mgr = ConfigManager()
+        cfg = config_mgr.load_config()
+        
+        # Single-root convenience (again after reload)
+        if cfg.get("has_single_root"):
+            pr = os.path.abspath(cfg.get("project_root", os.getcwd()))
+            cfg["directories"] = [{
+                "name": os.path.basename(pr) or pr,
+                "is_remote": cfg.get("system_type") == "remote",
+                "directory": pr
+            }]
+        
+        print("\n🔄 Regenerating step1 with latest config...")
+        setup_text = step1(cfg)
+        
     else:
-        # Normal mode with GUI
+        # Normal mode with GUI - pass config to step2_all_segments
         segment_text = step2_all_segments(cfg)
+        
+        # IMPORTANT: Reload config and regenerate step1 after GUI closes
+        # This ensures any config changes made in the GUI are reflected
+        config_mgr = ConfigManager()
+        cfg = config_mgr.load_config()
+        
+        # Single-root convenience (again after reload)
+        if cfg.get("has_single_root"):
+            pr = os.path.abspath(cfg.get("project_root", os.getcwd()))
+            cfg["directories"] = [{
+                "name": os.path.basename(pr) or pr,
+                "is_remote": cfg.get("system_type") == "remote",
+                "directory": pr
+            }]
+        
+        print("\n🔄 Regenerating step1 with latest config...")
+        setup_text = step1(cfg)
     
     # Combine outputs
     final_text = "\n\n".join([p for p in [setup_text, segment_text] if p.strip()])

@@ -53,7 +53,7 @@ def _write_temp(txt: str) -> str:
     return tf.name
 
 # ---------------------------------------------------------------------------
-# STEP 1  –  build “setup” text block
+# STEP 1  –  build "setup" text block
 # ---------------------------------------------------------------------------
 
 def step1(config: dict) -> str:
@@ -64,9 +64,11 @@ def step1(config: dict) -> str:
         + rules.txt
         + current_goal.txt
         + optional extra project-output files
-    No editor window is opened here; the caller decides what to do with the
-    resulting text.
+    
+    This function always reads the latest content from disk to ensure
+    any edits made through the GUI are reflected in the output.
     """
+    # Always read fresh content from disk (not from config dict)
     background   = _read_local("background.txt")
     rules        = _read_local("rules.txt")
     current_goal = _read_local("current_goal.txt")
@@ -150,26 +152,39 @@ def step2_all_segments(config: dict) -> str:
     Spawn a file-selection GUI for each segment and return a single string
     containing the concatenated content of all user-selected files
     (triple-newline separated). No editor windows are opened here.
+    
+    NOTE: This function passes the config to the GUI so that any edits made
+    in the Edit Config tab are reflected in the config used by step1.
     """
     from gui import gui_selection
     from setup.content_setup import is_rel_path_blacklisted
 
     blobs = []
     project_root = os.path.abspath(config.get("project_root", os.getcwd()))
-    color_cycle = ["light blue", "lavender", "light green", "light yellow", "light coral"]
+    color_cycle = ["#e6f3ff", "#f0e6ff", "#e6ffe6", "#ffffe6", "#ffe6e6"]
 
-    for idx, seg in enumerate(config.get("directories", [])):
-        print(f"Starting file selection for segment '{seg['name']}'")
+    # If single root, we only need one GUI window
+    if config.get("has_single_root"):
+        seg = config.get("directories", [{}])[0] if config.get("directories") else {
+            "name": os.path.basename(project_root) or "Project",
+            "directory": project_root,
+            "is_remote": config.get("system_type") == "remote"
+        }
+        print(f"Starting file selection for project")
+        
+        # Pass config to gui_selection (enhanced version will use it)
         selected = gui_selection(
-            f"Select Files for {seg['name']}",
-            color_cycle[idx % len(color_cycle)],
-            seg["directory"],
-            seg["name"],
+            f"Select Project Files",
+            color_cycle[0],
+            seg.get("directory", project_root),
+            seg.get("name", "Project"),
             seg.get("is_remote", False),
-            config.get("ssh_command","") if seg.get("is_remote") else "",
+            config.get("ssh_command", "") if seg.get("is_remote") else "",
             config.get("blacklist", {}),
-            project_root
+            project_root,
+            config  # Pass the full config
         )
+        
         seg["output_files"] = selected
 
         seg_texts = []
@@ -191,5 +206,41 @@ def step2_all_segments(config: dict) -> str:
                         pass
         if seg_texts:
             blobs.append("\n\n".join(seg_texts))
+    else:
+        # Multiple segments
+        for idx, seg in enumerate(config.get("directories", [])):
+            print(f"Starting file selection for segment '{seg['name']}'")
+            selected = gui_selection(
+                f"Select Files for {seg['name']}",
+                color_cycle[idx % len(color_cycle)],
+                seg["directory"],
+                seg["name"],
+                seg.get("is_remote", False),
+                config.get("ssh_command","") if seg.get("is_remote") else "",
+                config.get("blacklist", {}),
+                project_root,
+                config  # Pass the full config
+            )
+            seg["output_files"] = selected
+
+            seg_texts = []
+            for fp in selected:
+                if seg.get("is_remote"):
+                    try:
+                        proc = subprocess.run(config.get("ssh_command","").split()+["cat", fp],
+                                              capture_output=True, text=True)
+                        if proc.returncode == 0:
+                            seg_texts.append(proc.stdout.rstrip())
+                    except Exception:
+                        pass
+                else:
+                    if os.path.exists(fp):
+                        try:
+                            with open(fp, "r", encoding="utf-8", errors="replace") as f:
+                                seg_texts.append(f.read().rstrip())
+                        except Exception:
+                            pass
+            if seg_texts:
+                blobs.append("\n\n".join(seg_texts))
 
     return "\n\n\n".join(blobs)

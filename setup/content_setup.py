@@ -47,18 +47,39 @@ class ContentSetupStep(WizardStep):
             "understand your project better. This includes background, coding standards, and goals."
         )
         
-        self.content_vars = {
-            'background': tk.StringVar(),
-            'rules': tk.StringVar(),
-            'current_goal': tk.StringVar()
-        }
+        # Initialize variables as None - they'll be created in create_ui
+        self.content_vars = None
+        self.additional_files_enabled = None
+        self.rule_vars = None
+        self.goal_type_var = None
         
-        self.additional_files_enabled = tk.BooleanVar(value=False)
         self.additional_files = {}
         self.file_trees = {}
+        
+        # Text widgets (created in create_ui)
+        self.background_text = None
+        self.rules_text = None
+        self.goal_text = None
+        
+        # Store reference to paginated tree widgets
+        self.paginated_trees = {}
     
     def create_ui(self, parent):
         """Create the UI for this step"""
+        print("DEBUG: ContentSetupStep.create_ui called")
+        
+        # Initialize tkinter variables now that root exists
+        if self.content_vars is None:
+            self.content_vars = {
+                'background': tk.StringVar(),
+                'rules': tk.StringVar(),
+                'current_goal': tk.StringVar()
+            }
+            self.additional_files_enabled = tk.BooleanVar(value=False)
+            self.rule_vars = {}
+            self.goal_type_var = tk.StringVar(value="feature")
+            print(f"DEBUG: Initialized variables, additional_files_enabled={self.additional_files_enabled.get()}")
+        
         # Create notebook for different content types
         self.notebook = ttk.Notebook(parent)
         self.notebook.pack(fill="both", expand=True)
@@ -72,7 +93,7 @@ class ContentSetupStep(WizardStep):
         # Goals tab
         self._create_goals_tab()
         
-        # Additional files tab
+        # Additional files tab - This is where the enhanced functionality comes in
         self._create_additional_files_tab()
         
         # AI Assistant tips
@@ -207,7 +228,6 @@ The library is designed for [target audience/use case]."""
         rules_frame = ttk.LabelFrame(tab, text="Common Rules", padding=10)
         rules_frame.pack(fill="x", padx=20, pady=10)
         
-        self.rule_vars = {}
         common_rules = [
             ("Use type hints/annotations", "Always use type hints in function signatures"),
             ("Include docstrings", "Add docstrings to all functions and classes"),
@@ -276,7 +296,6 @@ The library is designed for [target audience/use case]."""
         goal_frame = ttk.LabelFrame(tab, text="Goal Type", padding=10)
         goal_frame.pack(fill="x", padx=20, pady=10)
         
-        self.goal_type_var = tk.StringVar(value="feature")
         goal_types = [
             ("feature", "🚀 New Feature", "Adding new functionality"),
             ("bug", "🐛 Bug Fix", "Fixing existing issues"),
@@ -329,10 +348,43 @@ The library is designed for [target audience/use case]."""
                      foreground='gray').pack(anchor="w", padx=(10, 0))
     
     def _create_additional_files_tab(self):
-        """Create additional files tab"""
+        """Create additional files tab using the enhanced AdditionalFilesEditor"""
         tab = ttk.Frame(self.notebook)
         self.notebook.add(tab, text="📎 Additional Files")
         
+        # Import and use the enhanced AdditionalFilesEditor
+        try:
+            from gui.additional_files import AdditionalFilesEditor
+            
+            # Create a mock tree_widget that has the required attributes
+            class MockTreeWidget:
+                def __init__(self, base_dir):
+                    self.base_dir = base_dir
+                    self.blacklist = {}
+            
+            # Get the base directory
+            base_dir = None
+            if self.wizard.config.get('has_single_root'):
+                base_dir = self.wizard.config.get('project_root')
+            else:
+                directories = self.wizard.config.get('directories', [])
+                if directories:
+                    base_dir = directories[0].get('directory')
+            
+            if base_dir:
+                mock_tree = MockTreeWidget(base_dir)
+                self.additional_editor = AdditionalFilesEditor(tab, mock_tree, self.wizard.config)
+                self.additional_editor.pack(fill="both", expand=True)
+            else:
+                # Fallback to basic implementation
+                self._create_basic_additional_files_tab(tab)
+                
+        except ImportError:
+            # If enhanced editor not available, use basic implementation
+            self._create_basic_additional_files_tab(tab)
+    
+    def _create_basic_additional_files_tab(self, tab):
+        """Create basic additional files tab (fallback)"""
         # Enable checkbox
         enable_frame = ttk.Frame(tab)
         enable_frame.pack(fill="x", padx=20, pady=(20, 10))
@@ -355,6 +407,8 @@ The library is designed for [target audience/use case]."""
     
     def _create_file_selection(self):
         """Create file selection interface"""
+        print(f"DEBUG: _create_file_selection called, enabled={self.additional_files_enabled.get()}")
+        
         for widget in self.files_frame.winfo_children():
             widget.destroy()
         
@@ -367,9 +421,11 @@ The library is designed for [target audience/use case]."""
         
         # Create file browser for each directory
         directories = self.wizard.config.get('directories', [])
+        print(f"DEBUG: Found {len(directories)} directories in config")
         
         if len(directories) == 1:
             # Single directory view
+            print(f"DEBUG: Creating single directory browser for: {directories[0]}")
             self._create_single_dir_file_browser(directories[0])
         else:
             # Multiple directory tabs
@@ -377,12 +433,15 @@ The library is designed for [target audience/use case]."""
             notebook.pack(fill="both", expand=True)
             
             for directory in directories:
+                print(f"DEBUG: Creating tab for directory: {directory}")
                 tab = ttk.Frame(notebook)
                 notebook.add(tab, text=directory['name'])
                 self._create_dir_file_browser(tab, directory)
     
     def _create_single_dir_file_browser(self, directory):
         """Create file browser for single directory"""
+        print(f"DEBUG: _create_single_dir_file_browser called for directory: {directory}")
+        
         # Toolbar
         toolbar = ttk.Frame(self.files_frame)
         toolbar.pack(fill="x", pady=(0, 10))
@@ -399,11 +458,17 @@ The library is designed for [target audience/use case]."""
     
     def _create_dir_file_browser(self, parent, directory):
         """Create file browser for a directory"""
+        print(f"DEBUG: _create_dir_file_browser called for directory: {directory}")
+        
         # Tree view
         tree_frame = ttk.Frame(parent)
         tree_frame.pack(fill="both", expand=True)
         
-        tree = ttk.Treeview(tree_frame, show="tree", selectmode="extended")
+        # Create tree with columns for path storage
+        tree = ttk.Treeview(tree_frame, show="tree", selectmode="extended", columns=("path",))
+        tree.column("path", width=0, stretch=False)  # Hidden column for path storage
+        tree.heading("path", text="Path")
+        
         vsb = ttk.Scrollbar(tree_frame, orient="vertical", command=tree.yview)
         hsb = ttk.Scrollbar(tree_frame, orient="horizontal", command=tree.xview)
         tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
@@ -419,6 +484,8 @@ The library is designed for [target audience/use case]."""
         tree.tag_configure("directory", foreground="#0066cc", font=('Arial', 10, 'bold'))
         tree.tag_configure("selected", background="#cce6ff")
         tree.tag_configure("config_file", foreground="#008000")
+        tree.tag_configure("loading", foreground="#999999", font=('Arial', 10, 'italic'))
+        tree.tag_configure("error", foreground="#cc0000")
         
         # Store tree reference
         self.file_trees[directory['directory']] = tree
@@ -449,11 +516,16 @@ The library is designed for [target audience/use case]."""
     
     def _load_file_tree(self, tree, directory):
         """Load directory structure into tree"""
+        print(f"DEBUG: _load_file_tree called for directory: {directory}")
+        
         # Clear existing
         tree.delete(*tree.get_children())
         
         root_path = directory['directory']
+        is_remote = directory.get('is_remote', False)
         blacklist = self.wizard.config.get('blacklist', {}).get(root_path, [])
+        
+        print(f"DEBUG: root_path={root_path}, is_remote={is_remote}")
         
         # Initialize selected files
         if root_path not in self.additional_files:
@@ -464,25 +536,200 @@ The library is designed for [target audience/use case]."""
         root_item = tree.insert("", "end", text=root_name, tags=["directory"], open=True)
         tree.set(root_item, "path", root_path)
         
-        # Load tree (limited depth for performance)
-        def load_items(parent_item, parent_path, level=0):
-            if level > 3:  # Limit depth
+        # Check if this is a remote directory
+        if is_remote:
+            print(f"DEBUG: Loading remote directory")
+            # Show loading message
+            loading_item = tree.insert(root_item, "end", text="Loading remote files...", tags=["loading"])
+            tree.update_idletasks()
+            
+            # Get SSH command
+            ssh_cmd = self.wizard.config.get('ssh_command', '')
+            print(f"DEBUG: ssh_cmd={ssh_cmd}")
+            
+            if not ssh_cmd:
+                tree.delete(loading_item)
+                tree.insert(root_item, "end", text="[Error: No SSH command configured]", tags=["error"])
                 return
             
-            try:
-                items = sorted(os.listdir(parent_path))
-            except:
+            # Load remote contents in background
+            import threading
+            thread = threading.Thread(
+                target=self._load_remote_file_tree,
+                args=(tree, root_item, loading_item, root_path, ssh_cmd, blacklist),
+                daemon=True
+            )
+            thread.start()
+        else:
+            print(f"DEBUG: Loading local directory")
+            # Load local tree (existing code)
+            def load_items(parent_item, parent_path, level=0):
+                if level > 3:  # Limit depth
+                    return
+                
+                try:
+                    items = sorted(os.listdir(parent_path))
+                    print(f"DEBUG: Found {len(items)} items in {parent_path}")
+                except Exception as e:
+                    print(f"DEBUG: Error listing {parent_path}: {e}")
+                    return
+                
+                for item in items:
+                    item_path = os.path.join(parent_path, item)
+                    rel_path = os.path.relpath(item_path, root_path)
+                    
+                    # Skip blacklisted
+                    if self._is_blacklisted_simple(rel_path, blacklist):
+                        continue
+                    
+                    try:
+                        is_dir = os.path.isdir(item_path)
+                    except:
+                        continue
+                    
+                    # Determine tags
+                    tags = []
+                    if is_dir:
+                        tags.append("directory")
+                    else:
+                        # Check if config file
+                        ext = os.path.splitext(item)[1].lower()
+                        if ext in ['.json', '.yaml', '.yml', '.toml', '.ini', '.conf']:
+                            tags.append("config_file")
+                    
+                    # Check if selected
+                    if item_path in self.additional_files[root_path]:
+                        tags.append("selected")
+                    
+                    # Insert item
+                    display_text = f"{'[✓] ' if 'selected' in tags else ''}{'📁 ' if is_dir else '📄 '}{item}"
+                    item_id = tree.insert(parent_item, "end", text=display_text, tags=tags)
+                    tree.set(item_id, "path", item_path)
+                    
+                    # Recurse for directories
+                    if is_dir:
+                        load_items(item_id, item_path, level + 1)
+            
+            load_items(root_item, root_path)
+        
+        self._update_selected_count(root_path)
+    
+    def _load_remote_file_tree(self, tree, root_item, loading_item, root_path, ssh_cmd, blacklist):
+        """Load remote directory tree in background thread"""
+        print(f"DEBUG: _load_remote_file_tree started for {root_path}")
+        
+        try:
+            import subprocess
+            
+            # Test SSH connection
+            test_cmd = f"{ssh_cmd} 'echo test'"
+            print(f"DEBUG: Testing SSH with: {test_cmd}")
+            test_result = subprocess.run(test_cmd, shell=True, capture_output=True, 
+                                       text=True, timeout=10)
+            
+            if test_result.returncode != 0:
+                error_msg = f"SSH connection failed: {test_result.stderr}"
+                print(f"ERROR: {error_msg}")
+                tree.after(0, lambda: self._handle_remote_load_error(tree, root_item, loading_item, error_msg))
                 return
             
-            for item in items:
-                item_path = os.path.join(parent_path, item)
-                rel_path = os.path.relpath(item_path, root_path)
+            print("DEBUG: SSH connection successful")
+            
+            # Get current additional files for marking
+            current_additional = self.additional_files.get(root_path, set())
+            
+            # Properly escape the directory path
+            escaped_path = root_path.replace("'", "'\"'\"'")
+            
+            # Get directory listing using find command with limited depth
+            cmd = f"{ssh_cmd} 'find '\"'{escaped_path}'\"' -maxdepth 4 -type f -o -type d | head -1000'"
+            print(f"DEBUG: Executing: {cmd}")
+            
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30)
+            
+            if result.returncode != 0:
+                # Try simpler ls command
+                cmd = f"{ssh_cmd} 'cd '\"'{escaped_path}'\"' && find . -maxdepth 4 | head -1000'"
+                print(f"DEBUG: Trying alternative: {cmd}")
+                result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30)
+            
+            if result.returncode == 0:
+                lines = result.stdout.strip().split('\n')
+                print(f"DEBUG: Found {len(lines)} paths")
                 
-                # Skip blacklisted
-                if self._is_blacklisted_simple(rel_path, blacklist):
-                    continue
+                # Build tree structure from flat list
+                tree_data = {}
                 
-                is_dir = os.path.isdir(item_path)
+                for line in lines:
+                    if not line or line == root_path or line == '.':
+                        continue
+                    
+                    # Get relative path
+                    if line.startswith('./'):
+                        rel_path = line[2:]
+                    elif line.startswith(root_path):
+                        rel_path = os.path.relpath(line, root_path)
+                    else:
+                        rel_path = line
+                    
+                    # Skip blacklisted
+                    if self._is_blacklisted_simple(rel_path, blacklist):
+                        continue
+                    
+                    # Build tree structure
+                    parts = rel_path.split('/')
+                    current = tree_data
+                    
+                    for i, part in enumerate(parts):
+                        if part not in current:
+                            current[part] = {}
+                        current = current[part]
+                
+                # Update UI in main thread
+                tree.after(0, lambda: self._populate_remote_tree(
+                    tree, root_item, loading_item, root_path, tree_data, current_additional))
+                
+            else:
+                error_msg = f"Failed to list directory: {result.stderr}"
+                print(f"ERROR: {error_msg}")
+                tree.after(0, lambda: self._handle_remote_load_error(tree, root_item, loading_item, error_msg))
+                
+        except subprocess.TimeoutExpired:
+            error_msg = "Connection timeout"
+            print(f"ERROR: {error_msg}")
+            tree.after(0, lambda: self._handle_remote_load_error(tree, root_item, loading_item, error_msg))
+        except Exception as e:
+            print(f"ERROR: Exception: {e}")
+            import traceback
+            traceback.print_exc()
+            tree.after(0, lambda: self._handle_remote_load_error(tree, root_item, loading_item, str(e)))
+    
+    def _handle_remote_load_error(self, tree, root_item, loading_item, error_msg):
+        """Handle error during remote loading"""
+        try:
+            tree.delete(loading_item)
+        except:
+            pass
+        tree.insert(root_item, "end", text=f"[Error: {error_msg}]", tags=["error"])
+    
+    def _populate_remote_tree(self, tree, root_item, loading_item, root_path, tree_data, selected_files):
+        """Populate tree with remote data (called in main thread)"""
+        print(f"DEBUG: _populate_remote_tree called")
+        
+        # Remove loading item
+        try:
+            tree.delete(loading_item)
+        except:
+            pass
+        
+        # Recursively add items
+        def add_items(parent_item, data_dict, current_path):
+            # Sort items - directories first, then files
+            items = sorted(data_dict.items(), key=lambda x: (len(x[1]) == 0, x[0].lower()))
+            
+            for name, children in items:
+                item_path = os.path.join(current_path, name)
+                is_dir = len(children) > 0
                 
                 # Determine tags
                 tags = []
@@ -490,25 +737,29 @@ The library is designed for [target audience/use case]."""
                     tags.append("directory")
                 else:
                     # Check if config file
-                    ext = os.path.splitext(item)[1].lower()
+                    ext = os.path.splitext(name)[1].lower()
                     if ext in ['.json', '.yaml', '.yml', '.toml', '.ini', '.conf']:
                         tags.append("config_file")
                 
                 # Check if selected
-                if item_path in self.additional_files[root_path]:
+                if item_path in selected_files:
                     tags.append("selected")
                 
                 # Insert item
-                display_text = f"{'[✓] ' if 'selected' in tags else ''}{'📁 ' if is_dir else '📄 '}{item}"
+                display_text = f"{'[✓] ' if 'selected' in tags else ''}{'📁 ' if is_dir else '📄 '}{name}"
                 item_id = tree.insert(parent_item, "end", text=display_text, tags=tags)
                 tree.set(item_id, "path", item_path)
                 
                 # Recurse for directories
                 if is_dir:
-                    load_items(item_id, item_path, level + 1)
+                    add_items(item_id, children, item_path)
         
-        load_items(root_item, root_path)
+        add_items(root_item, tree_data, root_path)
+        
+        # Update selected count
         self._update_selected_count(root_path)
+        
+        print("DEBUG: Remote tree population complete")
     
     def _is_blacklisted_simple(self, rel_path, blacklist):
         """Simple blacklist check"""
@@ -529,7 +780,12 @@ The library is designed for [target audience/use case]."""
             return
         
         item_path = tree.set(item, "path")
-        if not item_path or os.path.isdir(item_path):
+        if not item_path:
+            return
+            
+        # Check if it's a directory by looking at tags
+        tags = tree.item(item, "tags")
+        if "directory" in tags:
             return
         
         # Toggle selection
@@ -548,12 +804,15 @@ The library is designed for [target audience/use case]."""
         
         def check_patterns(item):
             path = tree.set(item, "path")
-            if path and os.path.isfile(path):
-                name = os.path.basename(path)
-                for pattern in patterns:
-                    import fnmatch
-                    if fnmatch.fnmatch(name, pattern):
-                        self.additional_files[root_path].add(path)
+            if path:
+                # Check if it's a file by looking at tags
+                tags = tree.item(item, "tags")
+                if "directory" not in tags:
+                    name = os.path.basename(path)
+                    for pattern in patterns:
+                        import fnmatch
+                        if fnmatch.fnmatch(name, pattern):
+                            self.additional_files[root_path].add(path)
             
             # Check children
             for child in tree.get_children(item):
@@ -582,6 +841,7 @@ The library is designed for [target audience/use case]."""
     
     def _toggle_additional_files(self):
         """Toggle additional files section"""
+        print(f"DEBUG: _toggle_additional_files called, enabled={self.additional_files_enabled.get()}")
         self._create_file_selection()
     
     def _create_tips_section(self, parent):
@@ -693,20 +953,26 @@ The library is designed for [target audience/use case]."""
         else:
             config['current_goal'] = ""
         
-        # Save additional files
-        if self.additional_files_enabled.get():
-            # Convert file sets to lists
-            if config.get('has_single_root'):
-                all_files = []
-                for files in self.additional_files.values():
-                    all_files.extend(list(files))
-                config['project_output_files'] = all_files
-            else:
-                # Save per directory
-                for directory in config.get('directories', []):
-                    dir_path = directory['directory']
-                    if dir_path in self.additional_files:
-                        directory['output_files'] = list(self.additional_files[dir_path])
+        # Save additional files - handle both basic and enhanced editors
+        if hasattr(self, 'additional_editor'):
+            # Enhanced editor handles its own saving through its save button
+            # But we can trigger it if needed
+            pass
+        else:
+            # Basic implementation
+            if self.additional_files_enabled.get():
+                # Convert file sets to lists
+                if config.get('has_single_root'):
+                    all_files = []
+                    for files in self.additional_files.values():
+                        all_files.extend(list(files))
+                    config['project_output_files'] = all_files
+                else:
+                    # Save per directory
+                    for directory in config.get('directories', []):
+                        dir_path = directory['directory']
+                        if dir_path in self.additional_files:
+                            directory['output_files'] = list(self.additional_files[dir_path])
         
         # Create instruction files
         os.makedirs(INSTRUCTIONS_DIR, exist_ok=True)
@@ -803,6 +1069,38 @@ The library is designed for [target audience/use case]."""
             
             if has_files:
                 self.additional_files_enabled.set(True)
+    
+    def get_help(self):
+        """Return help text for this step"""
+        return """Content Configuration Help:
+
+Background Tab:
+• Describe your project's purpose and architecture
+• Use templates as starting points
+• Be specific about technologies and frameworks
+
+Coding Standards Tab:
+• Select common rules that apply to your project
+• Add custom standards specific to your team
+• Include formatting preferences
+
+Current Goals Tab:
+• Choose the type of work you're doing
+• Describe what you want to accomplish
+• Be specific about features or issues
+
+Additional Files Tab:
+• Select configuration files, schemas, documentation
+• Files selected here are included in every GPT session
+• Use pattern selection for common file types
+• Click checkbox or press Space to select/deselect files
+• For remote directories, files are loaded with pagination
+
+Tips:
+• More context = better AI assistance
+• Update goals as you work on different tasks
+• Keep rules consistent with your team standards
+"""
 
 # ---------------------------------------------------------------------------
 # Classic content-setup wizard for backward compatibility

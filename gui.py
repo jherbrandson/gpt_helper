@@ -10,7 +10,7 @@ STATE_SELECTION_FILE = "selection_state.json"
 
 
 # ---------------------------------------------------------------------------
-# helper functions to persist the “last-checked” file list
+# helper functions to persist the "last-checked" file list
 # ---------------------------------------------------------------------------
 def load_selection_state():
     if os.path.exists(STATE_SELECTION_FILE):
@@ -117,13 +117,30 @@ def gui_selection(
     is_remote=False,
     ssh_cmd="",
     blacklist=None,
-    project_root=None
+    project_root=None,
+    config=None  # Add config parameter
 ):
     """
     Show a scrolling checkbox list (one per file) and return the list of files
     the user marked with [x].  Selections are persisted across runs so the next
     invocation begins pre-checked.
+    
+    If config is provided and contains a GUI module with enhanced features,
+    use that instead of the basic GUI.
     """
+    # Check if enhanced GUI is available
+    try:
+        from gui.main import gui_selection as enhanced_gui_selection
+        # Use enhanced GUI if available
+        return enhanced_gui_selection(
+            title, bg_color, base_dir, state_key, 
+            is_remote, ssh_cmd, blacklist, project_root, config
+        )
+    except ImportError:
+        # Fall back to basic GUI
+        pass
+    
+    # Basic GUI implementation (existing code)
     state = load_selection_state()
     persistent_files = state.get(state_key, [])
 
@@ -142,7 +159,7 @@ def gui_selection(
     )
     root.mainloop()
 
-    # Persist only if the user pressed “Finish”
+    # Persist only if the user pressed "Finish"
     selected = app.selected_files
     state[state_key] = selected
     save_selection_state(state)

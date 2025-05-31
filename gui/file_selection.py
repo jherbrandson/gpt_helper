@@ -11,8 +11,75 @@ from tkinter import ttk, font as tkfont
 from datetime import datetime
 import fnmatch
 from collections import defaultdict
-from setup.content_setup import is_rel_path_blacklisted
+import sys
+
+# Add parent directory to path for imports
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+try:
+    from setup.content_setup import is_rel_path_blacklisted
+    from setup.remote_utils import get_remote_tree, parse_remote_tree
+except ImportError:
+    # Fallback implementation
+    def is_rel_path_blacklisted(rel_path, blacklist):
+        """Check if a relative path is blacklisted"""
+        for pattern in blacklist:
+            if rel_path.startswith(pattern):
+                return True
+        return False
+
 from .base import FileTreeNode, remote_cache, setup_tree_tags
+
+class CheckboxTreeview(ttk.Treeview):
+    """Custom Treeview with checkbox support"""
+    
+    def __init__(self, parent, **kwargs):
+        super().__init__(parent, **kwargs)
+        
+        # Create checkbox images
+        self._create_checkbox_images()
+        
+        # Store checkbox states
+        self.checkbox_states = {}
+    
+    def _create_checkbox_images(self):
+        """Create checkbox images"""
+        # Create small canvas for checkbox images
+        size = 16
+        
+        # Unchecked box
+        unchecked = tk.PhotoImage(width=size, height=size)
+        for x in range(size):
+            for y in range(size):
+                if x in (0, size-1) or y in (0, size-1):
+                    unchecked.put("#666666", (x, y))
+                else:
+                    unchecked.put("#ffffff", (x, y))
+        self.unchecked_image = unchecked
+        
+        # Checked box
+        checked = tk.PhotoImage(width=size, height=size)
+        for x in range(size):
+            for y in range(size):
+                if x in (0, size-1) or y in (0, size-1):
+                    checked.put("#666666", (x, y))
+                elif 3 <= x <= size-4 and 3 <= y <= size-4:
+                    checked.put("#0066cc", (x, y))
+                else:
+                    checked.put("#ffffff", (x, y))
+        self.checked_image = checked
+        
+        # Tristate box (for partial selection)
+        tristate = tk.PhotoImage(width=size, height=size)
+        for x in range(size):
+            for y in range(size):
+                if x in (0, size-1) or y in (0, size-1):
+                    tristate.put("#666666", (x, y))
+                elif 6 <= x <= size-7 and 6 <= y <= size-7:
+                    tristate.put("#999999", (x, y))
+                else:
+                    tristate.put("#ffffff", (x, y))
+        self.tristate_image = tristate
 
 class EnhancedTreeWidget(ttk.Frame):
     def __init__(self, parent, base_dir, persistent_files=None, is_remote=False, 
@@ -122,8 +189,8 @@ class EnhancedTreeWidget(ttk.Frame):
         tree_container = ttk.Frame(self)
         tree_container.pack(fill="both", expand=True, padx=5, pady=5)
         
-        # Create tree with custom style
-        self.tree = ttk.Treeview(tree_container, show="tree", selectmode="extended")
+        # Create custom tree with checkbox support
+        self.tree = CheckboxTreeview(tree_container, show="tree", selectmode="extended")
         
         # Configure columns for additional info
         self.tree["columns"] = ("size", "modified", "status")
@@ -153,8 +220,9 @@ class EnhancedTreeWidget(ttk.Frame):
         self._setup_enhanced_tags()
         
         # Bind events
-        self.tree.bind("<Double-1>", self._on_double_click)
-        self.tree.bind("<Button-1>", self._on_single_click)
+        self.tree.bind("<Button-1>", self._on_click)
+        self.tree.bind("<<TreeviewOpen>>", self._on_tree_open)
+        self.tree.bind("<<TreeviewClose>>", self._on_tree_close)
         self.tree.bind("<Button-3>", self._show_context_menu)  # Right-click
         self.tree.bind("<space>", self._on_space_key)
         self.tree.bind("<Control-a>", lambda e: self._select_all())
@@ -345,7 +413,11 @@ class EnhancedTreeWidget(ttk.Frame):
             return cached_items
         
         # Fetch from remote
-        from setup.remote_utils import get_remote_tree, parse_remote_tree
+        try:
+            from setup.remote_utils import get_remote_tree, parse_remote_tree
+        except ImportError:
+            return []
+            
         lines = get_remote_tree(self.base_dir, self.ssh_cmd)
         tree_dict = parse_remote_tree(lines, self.base_dir)
         
@@ -410,15 +482,24 @@ class EnhancedTreeWidget(ttk.Frame):
         """Add a node with enhanced formatting and information"""
         # Icon based on type and state
         if node.is_dir:
+            icon = "📁"
+            tags = ["directory"]
+            
+            # Check if directory has some but not all children selected
+            total_children = sum(1 for child in node.children if not child.is_dir)
+            selected_children = sum(1 for child in node.children if not child.is_dir and child.selected)
+            
+            # Also check subdirectories
+            for child in node.children:
+                if child.is_dir:
+                    if self._has_selected_files(child):
+                        selected_children += 1
+                    total_children += 1
+            
             if node.selected:
-                icon = "📁"  # Open folder
-                tags = ["directory", "directory_selected"]
-            elif any(child.selected for child in node.children):
-                icon = "📂"  # Partially selected folder
-                tags = ["directory", "directory_partial"]
-            else:
-                icon = "📁"  # Closed folder
-                tags = ["directory"]
+                tags.append("directory_selected")
+            elif selected_children > 0 and selected_children < total_children:
+                tags.append("directory_partial")
         else:
             icon = "📄"
             file_type = self._determine_file_type(node.name)
@@ -436,9 +517,8 @@ class EnhancedTreeWidget(ttk.Frame):
             elif node.name.endswith(('.md', '.txt')):
                 icon = "📝"
         
-        # Build display text
-        checkbox = "☑" if node.selected else "☐"
-        display_text = f"{checkbox} {icon} {node.name}"
+        # Build display text (with some spacing after where checkbox will be)
+        display_text = f"    {icon} {node.name}"
         
         # Get file info
         size, mtime, status = self._get_file_info(node.path)
@@ -450,10 +530,29 @@ class EnhancedTreeWidget(ttk.Frame):
         if node.name.startswith('.') and not self.show_hidden_var.get():
             tags.append("hidden")
         
-        # Insert item
+        # Determine checkbox state
+        if node.is_dir:
+            # For directories, check if all/some/none children are selected
+            if node.selected:
+                checkbox_state = "checked"
+                checkbox_image = self.tree.checked_image
+            elif self._has_selected_files(node):
+                checkbox_state = "tristate"
+                checkbox_image = self.tree.tristate_image
+            else:
+                checkbox_state = "unchecked"
+                checkbox_image = self.tree.unchecked_image
+        else:
+            checkbox_state = "checked" if node.selected else "unchecked"
+            checkbox_image = self.tree.checked_image if node.selected else self.tree.unchecked_image
+        
+        # Insert item with checkbox image
         values = (size, mtime, status)
-        item = self.tree.insert(parent_item, "end", text=display_text, tags=tags, values=values)
+        item = self.tree.insert(parent_item, "end", text=display_text, tags=tags, values=values, image=checkbox_image)
         self.item_to_node[item] = node
+        
+        # Store checkbox state
+        self.tree.checkbox_states[item] = checkbox_state
         
         # Add children
         if node.is_dir:
@@ -461,29 +560,6 @@ class EnhancedTreeWidget(ttk.Frame):
             for child in children:
                 if child.visible or self.show_hidden_var.get():
                     self._add_node_to_tree_enhanced(item, child)
-        
-        return item
-    
-    def _add_node_to_tree(self, parent_item, node):
-        """Add a node and its children to the tree (basic version for compatibility)"""
-        # Determine display text
-        prefix = "[✓] " if node.selected else "[ ] "
-        suffix = "/" if node.is_dir else ""
-        display_text = f"{prefix}{node.name}{suffix}"
-        
-        # Determine tags
-        tags = ["directory" if node.is_dir else "file"]
-        if node.selected:
-            tags.append("selected")
-        
-        # Insert item
-        item = self.tree.insert(parent_item, "end", text=display_text, tags=tags)
-        self.item_to_node[item] = node
-        
-        # Add children
-        for child in sorted(node.children, key=lambda n: (not n.is_dir, n.name.lower())):
-            if child.visible:
-                self._add_node_to_tree(item, child)
         
         return item
     
@@ -524,7 +600,7 @@ class EnhancedTreeWidget(ttk.Frame):
         """Select all files in a folder"""
         self._save_selection_state()
         node.set_selection(True, recursive=True)
-        self._update_display()
+        self._update_display(full_refresh=True)
     
     def _deselect_folder(self, node):
         """Deselect all files in a folder"""
@@ -550,7 +626,7 @@ class EnhancedTreeWidget(ttk.Frame):
             if pattern:
                 self._save_selection_state()
                 self._select_by_pattern_in_node(node, pattern)
-                self._update_display()
+                self._update_display(full_refresh=True)
             dialog.destroy()
         
         ttk.Button(dialog, text="Apply", command=apply_pattern).pack(pady=10)
@@ -713,7 +789,7 @@ class EnhancedTreeWidget(ttk.Frame):
     
     def _refresh_view(self):
         """Refresh view based on current settings"""
-        self._update_display()
+        self._update_display(full_refresh=True)
     
     def _update_status(self):
         """Update the status bar with detailed information"""
@@ -752,26 +828,31 @@ class EnhancedTreeWidget(ttk.Frame):
                 pass
         return total
     
-    def _update_display(self):
+    def _update_display(self, full_refresh=False):
         """Update the tree display after changes"""
-        # Remember expanded state and selection
-        expanded_items = set()
-        selected_items = set()
-        for item in self.item_to_node:
-            if self.tree.item(item, "open"):
-                expanded_items.add(self.item_to_node[item].path)
-            if item in self.tree.selection():
-                selected_items.add(self.item_to_node[item].path)
-        
-        # Repopulate tree
-        self._populate_tree()
-        
-        # Restore expanded state and selection
-        for item, node in self.item_to_node.items():
-            if node.path in expanded_items:
-                self.tree.item(item, open=True)
-            if node.path in selected_items:
-                self.tree.selection_add(item)
+        if full_refresh or self.filter_var.get():
+            # For filtering or full refresh, we need to repopulate
+            # Remember expanded state and selection
+            expanded_items = set()
+            selected_items = set()
+            for item in self.item_to_node:
+                if self.tree.item(item, "open"):
+                    expanded_items.add(self.item_to_node[item].path)
+                if item in self.tree.selection():
+                    selected_items.add(self.item_to_node[item].path)
+            
+            # Repopulate tree
+            self._populate_tree()
+            
+            # Restore expanded state and selection
+            for item, node in self.item_to_node.items():
+                if node.path in expanded_items:
+                    self.tree.item(item, open=True)
+                if node.path in selected_items:
+                    self.tree.selection_add(item)
+        else:
+            # Just update checkbox displays
+            self._update_checkbox_displays()
         
         self._update_status()
     
@@ -791,27 +872,177 @@ class EnhancedTreeWidget(ttk.Frame):
             count += self._count_visible_files(child)
         return count
     
-    # Event handlers
-    def _on_double_click(self, event):
-        """Handle double-click to toggle selection"""
-        item = self.tree.identify("item", event.x, event.y)
-        if item and item in self.item_to_node:
-            self._save_selection_state()
-            node = self.item_to_node[item]
-            node.toggle_selection(recursive=event.state & 0x0001)  # Shift key
-            self._update_display()
+    def _has_selected_files(self, node):
+        """Check if a node or any of its children has selected files"""
+        if not node.is_dir and node.selected:
+            return True
+        
+        for child in node.children:
+            if self._has_selected_files(child):
+                return True
+        
+        return False
     
-    def _on_single_click(self, event):
-        """Handle single click on checkbox area"""
+    # Event handlers
+    def _on_click(self, event):
+        """Handle click events on the tree"""
+        # Identify what was clicked
+        region = self.tree.identify_region(event.x, event.y)
         item = self.tree.identify("item", event.x, event.y)
-        if item and item in self.item_to_node:
-            # Check if click is in checkbox area (first 50 pixels)
-            x = self.tree.bbox(item)[0]
-            if event.x - x < 50:
-                self._save_selection_state()
-                node = self.item_to_node[item]
-                node.toggle_selection(recursive=False)
-                self._update_display()
+        column = self.tree.identify_column(event.x)
+        
+        if not item:
+            return
+        
+        # Handle different regions
+        if region == "tree":
+            # Clicked on the expand/collapse indicator
+            # Let the default behavior handle it
+            pass
+        elif column == "#0":  # Clicked in the main tree column
+            # Get the bounding box of the item
+            bbox = self.tree.bbox(item, column="#0")
+            if bbox:
+                # The checkbox image is at the beginning of the text
+                # Calculate where it should be
+                x, y, width, height = bbox
+                
+                # The checkbox is displayed as the item's image at the very beginning
+                # Checkbox images are 16x16 pixels
+                checkbox_size = 16
+                
+                # Check if click is within the checkbox area
+                # Add a bit of padding for easier clicking
+                checkbox_x_start = x
+                checkbox_x_end = x + checkbox_size + 4  # 4 pixels of padding
+                
+                if checkbox_x_start <= event.x <= checkbox_x_end:
+                    # Clicked on checkbox
+                    self._toggle_checkbox(item)
+                    # Prevent default selection behavior
+                    return "break"
+    
+    def _toggle_checkbox(self, item):
+        """Toggle checkbox state for an item"""
+        if item not in self.item_to_node:
+            return
+        
+        self._save_selection_state()
+        node = self.item_to_node[item]
+        
+        # Toggle the node selection state
+        if node.is_dir:
+            # Directory checkbox clicked - toggle state
+            if node.selected:
+                node.set_selection(False, recursive=True)
+                new_state = "unchecked"
+                new_image = self.tree.unchecked_image
+            else:
+                node.set_selection(True, recursive=True)
+                new_state = "checked"
+                new_image = self.tree.checked_image
+        else:
+            # File checkbox clicked
+            node.selected = not node.selected
+            new_state = "checked" if node.selected else "unchecked"
+            new_image = self.tree.checked_image if node.selected else self.tree.unchecked_image
+        
+        # Update the checkbox image
+        self.tree.item(item, image=new_image)
+        self.tree.checkbox_states[item] = new_state
+        
+        # Update parent directory states
+        self._update_parent_directory_states()
+        
+        # Update all affected items in the tree
+        self._update_checkbox_displays()
+        self._update_status()
+    
+    def _on_tree_open(self, event):
+        """Handle tree item expansion"""
+        # Default behavior is fine - just expand/collapse
+        pass
+    
+    def _on_tree_close(self, event):
+        """Handle tree item collapse"""
+        # Default behavior is fine - just expand/collapse
+        pass
+
+    def _update_checkbox_displays(self):
+        """Update checkbox displays for all items based on their state"""
+        for item, node in self.item_to_node.items():
+            if node.is_dir:
+                # For directories, check if all/some/none children are selected
+                if node.selected:
+                    state = "checked"
+                    image = self.tree.checked_image
+                elif self._has_selected_files(node):
+                    state = "tristate"
+                    image = self.tree.tristate_image
+                else:
+                    state = "unchecked"
+                    image = self.tree.unchecked_image
+            else:
+                state = "checked" if node.selected else "unchecked"
+                image = self.tree.checked_image if node.selected else self.tree.unchecked_image
+            
+            # Update the item's checkbox
+            self.tree.item(item, image=image)
+            self.tree.checkbox_states[item] = state
+            
+            # Update tags for visual feedback
+            tags = list(self.tree.item(item, "tags"))
+            if node.is_dir:
+                # Remove old selection tags
+                tags = [t for t in tags if t not in ("directory_selected", "directory_partial")]
+                if node.selected:
+                    tags.append("directory_selected")
+                elif self._has_selected_files(node):
+                    tags.append("directory_partial")
+            else:
+                # Remove old selection tags
+                tags = [t for t in tags if t != "file_selected"]
+                if node.selected:
+                    tags.append("file_selected")
+            self.tree.item(item, tags=tags)
+    
+    def _update_parent_directory_states(self):
+        """Update directory selection states based on their children"""
+        def update_directory_state(node):
+            if not node.is_dir:
+                return
+            
+            # Count selected children
+            total_children = 0
+            selected_children = 0
+            
+            for child in node.children:
+                if not child.is_dir:
+                    total_children += 1
+                    if child.selected:
+                        selected_children += 1
+                else:
+                    # Recursively update child directories first
+                    update_directory_state(child)
+                    # Count this directory as selected if it has any selected files
+                    if child.selected or self._has_selected_files(child):
+                        selected_children += 1
+                    total_children += 1
+            
+            # Update directory state based on children
+            if total_children == 0:
+                # Empty directory
+                node.selected = False
+            elif selected_children == total_children and selected_children > 0:
+                # All children selected
+                node.selected = True
+            else:
+                # Some or no children selected
+                node.selected = False
+        
+        # Start from root
+        if self.root_node:
+            update_directory_state(self.root_node)
     
     def _on_space_key(self, event):
         """Handle space key to toggle selection"""
@@ -819,11 +1050,8 @@ class EnhancedTreeWidget(ttk.Frame):
         if selected_items:
             self._save_selection_state()
         for item in selected_items:
-            if item in self.item_to_node:
-                node = self.item_to_node[item]
-                node.toggle_selection(recursive=False)
-        if selected_items:
-            self._update_display()
+            self._toggle_checkbox(item)
+        return "break"  # Prevent default behavior
     
     def _on_filter_changed(self, *args):
         """Handle filter text change with debouncing"""

@@ -18,6 +18,7 @@ from .file_selection import EnhancedTreeWidget, ImprovedFileSelectionWidget
 from .blacklist import BlacklistEditor
 from .additional_files import AdditionalFilesEditor
 from .config_editor import ConfigFilesEditor
+from .annotation_manager import AnnotationManagerTab
 
 class ImprovedFileSelectionGUI:
     def __init__(self, master, title, bg_color, base_dir, persistent_files,
@@ -132,15 +133,51 @@ class ImprovedFileSelectionGUI:
         self.notebook.add(self.edit_tab, text="✏️ Edit Config")
         self.config_editor = ConfigFilesEditor(
             self.edit_tab,
-            self.config
+            self.config,
+            on_config_update=self._on_config_update
         )
         self.config_editor.pack(fill="both", expand=True)
         
-        # Performance tab (new)
+        # Annotation Manager tab
+        self.annotation_tab = ttk.Frame(self.notebook)
+        self.notebook.add(self.annotation_tab, text="📝 Annotations")
+        self.annotation_manager = AnnotationManagerTab(
+            self.annotation_tab,
+            self.config
+        )
+        self.annotation_manager.pack(fill="both", expand=True)
+        
+        # Performance tab
         self.perf_tab = ttk.Frame(self.notebook)
         self.notebook.add(self.perf_tab, text="📊 Performance")
         self._create_performance_tab()
-    
+
+    def _on_config_update(self, updated_config):
+        """Handle configuration updates from the config editor"""
+        # Update the config reference
+        self.config = updated_config
+        
+        # Update all components that use the config
+        if hasattr(self, 'blacklist_editor'):
+            self.blacklist_editor.config = updated_config
+            
+        if hasattr(self, 'additional_editor'):
+            self.additional_editor.config = updated_config
+        
+        if hasattr(self, 'annotation_manager'):
+            self.annotation_manager.config = updated_config
+            self.annotation_manager.manager.config = updated_config
+        
+        # If tree widget needs to be aware of config changes (e.g., for blacklist)
+        if hasattr(self, 'tree_widget'):
+            self.tree_widget.blacklist = updated_config.get("blacklist", {})
+        
+        # Update status with emoji for clarity
+        self.main_status.set("✅ Configuration updated and ready to use!")
+        
+        # Show prominent notification
+        self._show_notification("✅ Configuration changes applied!\nThe updated config will be used when you click Finish.", 3500)
+        
     def _create_performance_tab(self):
         """Create performance monitoring tab"""
         # Cache management
@@ -232,6 +269,7 @@ class ImprovedFileSelectionGUI:
         self.master.bind("<Control-3>", lambda e: self.notebook.select(2))
         self.master.bind("<Control-4>", lambda e: self.notebook.select(3))
         self.master.bind("<Control-5>", lambda e: self.notebook.select(4))
+        self.master.bind("<Control-6>", lambda e: self.notebook.select(5))
     
     def _load_initial_data(self):
         """Load initial data with progress indication"""
@@ -244,6 +282,10 @@ class ImprovedFileSelectionGUI:
             elapsed = time.time() - self.start_time
             self.perf_label.config(text=f"Loaded in {elapsed:.1f}s")
             self._update_cache_info()
+            
+            # Trigger initial scan for annotation manager
+            if hasattr(self, 'annotation_manager'):
+                self.annotation_manager.scan_project()
         
         # Schedule completion check
         self.master.after(500, load_complete)
@@ -355,6 +397,9 @@ class ImprovedFileSelectionGUI:
             
             if hasattr(self.additional_editor, '_load_additional_files_config'):
                 self.additional_editor._load_additional_files_config()
+            
+            if hasattr(self.annotation_manager, 'scan_project'):
+                self.annotation_manager.scan_project()
             
             self.progress_bar.stop()
             self.progress_bar.pack_forget()
@@ -524,7 +569,7 @@ class ImprovedFileSelectionGUI:
         • F1 - Show this help
         
         Tab Navigation:
-        • Ctrl+1 to 5 - Switch to tab 1-5
+        • Ctrl+1 to 6 - Switch to tab 1-6
         
         File Selection:
         • Ctrl+A - Select all files
@@ -536,6 +581,11 @@ class ImprovedFileSelectionGUI:
         Tree Navigation:
         • Right-click - Context menu
         • Enter - Expand/collapse directory
+        
+        Config Editor:
+        • Ctrl+Z - Undo
+        • Ctrl+Y - Redo
+        • Ctrl+A - Select all text
         """
         
         shortcuts_text.insert("1.0", shortcuts)
@@ -568,6 +618,11 @@ class ImprovedFileSelectionGUI:
            - Group related files using Additional Files
            - Keep blacklist updated
            - Save states for different contexts
+           
+        5. Annotations:
+           - Use the Annotations tab to ensure all files have proper headers
+           - Batch annotate missing files
+           - Preview annotations before applying
         """
         
         tips_text.insert("1.0", tips)
@@ -583,20 +638,24 @@ class ImprovedFileSelectionGUI:
         notification.wm_overrideredirect(True)
         notification.attributes("-topmost", True)
         
-        label = ttk.Label(notification, text=message, 
-                         background="#2d2d2d", foreground="white",
-                         padding=10)
+        # Create a frame with border for better visibility
+        frame = ttk.Frame(notification, relief="solid", borderwidth=2)
+        frame.pack()
+        
+        label = ttk.Label(frame, text=message, 
+                        background="#2d2d2d", foreground="white",
+                        padding=10, font=("Arial", 11, "bold"))
         label.pack()
         
-        # Position at top-right of main window
+        # Position at top-center of main window
         self.master.update_idletasks()
-        x = self.master.winfo_x() + self.master.winfo_width() - 200
+        x = self.master.winfo_x() + (self.master.winfo_width() // 2) - 100
         y = self.master.winfo_y() + 50
         notification.geometry(f"+{x}+{y}")
         
         # Auto-destroy after duration
         notification.after(duration, notification.destroy)
-    
+        
     def clear_cache(self):
         """Clear the remote cache"""
         remote_cache.cache = {}
@@ -635,24 +694,29 @@ class ImprovedFileSelectionGUI:
 EnhancedFileSelectionGUI = ImprovedFileSelectionGUI
 
 def gui_selection(title, bg_color, base_dir, state_key, is_remote=False,
-                 ssh_cmd="", blacklist=None, project_root=None):
+                 ssh_cmd="", blacklist=None, project_root=None, config=None):
     """
     Enhanced GUI with better UX, bulk operations, and integrated editing
+    
+    Parameters:
+    - config: Optional config dict to pass to the GUI for editing
     """
     # Load state
     state = load_selection_state()
     persistent_files = state.get(state_key, [])
     
-    # Load config for editing features
+    # Load config for editing features (if not provided)
     from setup.constants import CONFIG_FILE
-    config = {}
-    if os.path.exists(CONFIG_FILE):
-        try:
-            with open(CONFIG_FILE, "r") as f:
-                config = json.load(f)
-        except:
-            pass
+    if config is None:
+        config = {}
+        if os.path.exists(CONFIG_FILE):
+            try:
+                with open(CONFIG_FILE, "r") as f:
+                    config = json.load(f)
+            except:
+                pass
     
+    import tkinter as tk
     root = tk.Tk()
     
     # Set initial size based on screen
